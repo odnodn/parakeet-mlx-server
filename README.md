@@ -120,6 +120,30 @@ PARAKEET_MODEL=NeurologyAI/neuro-parakeet-mlx ./start_server.sh
 python parakeet_server.py --port 8002 --model NeurologyAI/neuro-parakeet-mlx
 ```
 
+### Running on a Mac mini (no sleep, always on)
+
+To keep the server running without interruption and prevent the Mac from sleeping or idling:
+
+1. **No sleep while server runs** – The start script uses `caffeinate` so the system stays awake whenever the server is running.
+
+2. **Run as services (no sleep, no idle, never stop)** – From the repo directory:
+   ```bash
+   chmod +x install_server_service.sh
+   ./install_server_service.sh
+   ```
+   This installs and starts two LaunchAgents:
+   - **Caffeinate** – runs continuously so the Mac never sleeps or goes idle.
+   - **Server** – starts at login and restarts automatically if it exits (throttled 10s between restarts).
+
+   Logs: `logs/parakeet-server.log` and `logs/parakeet-server.err`. To stop everything:
+   ```bash
+   launchctl unload ~/Library/LaunchAgents/com.parakeet-mlx.caffeinate.plist
+   launchctl unload ~/Library/LaunchAgents/com.parakeet-mlx.server.plist
+   ```
+   Run `./install_server_service.sh` again to restart both services.
+
+   **Note:** The server LaunchAgent uses a login shell (`-lc`) so that conda is available. Ensure conda is initialized in your login profile (e.g. `~/.zshrc` or `~/.bash_profile`) on the Mac mini.
+
 ### Available Models
 
 * `NeurologyAI/neuro-parakeet-mlx` (recommended) - Fine-tuned for German neurology and neuro-oncology terminology
@@ -175,6 +199,10 @@ Verify model integrity using SHA256 checksum:
 export MODEL_SHA256="expected-sha256-checksum"
 python parakeet_server.py
 ```
+
+#### Production deployment
+
+For production (behind nginx, with API key required and CORS restricted), set `ENV=production`, `API_KEY`, and `CORS_ORIGINS`, then start the server or run `./install_server_service.sh`. See **[PRODUCTION.md](PRODUCTION.md)** for the full checklist. The repo includes **nginx/** (reverse-proxy and TLS examples) and **scripts/** (log rotation, healthcheck, dependency checks).
 
 #### Security Features
 

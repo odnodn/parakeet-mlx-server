@@ -46,9 +46,11 @@ htmlcov/
 .hypothesis/
 *.cover
 
-# Environment variables
+# Environment variables and secrets
 .env
 .env.local
+.env.production
+.env.*.local
 
 # Logs
 *.log
@@ -77,3 +79,7 @@ models/
 
 # Server files
 server.log
+
+# Generated / local
+*.generated
+*.plist.generated

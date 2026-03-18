@@ -3,7 +3,7 @@
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel
 from typing import Optional, List
@@ -21,8 +21,15 @@ import secrets
 from datetime import datetime
 from pathlib import Path
 
-logging.basicConfig(level=logging.INFO)
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(
+    level=getattr(logging, LOG_LEVEL, logging.INFO),
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%dT%H:%M:%S",
+)
 logger = logging.getLogger(__name__)
+ENV = os.getenv("ENV", "development").lower()
+IS_PRODUCTION = ENV == "production"
 
 try:
     from parakeet_mlx import from_pretrained
@@ -53,8 +60,13 @@ DEFAULT_MODEL = os.getenv("PARAKEET_MODEL", "NeurologyAI/neuro-parakeet-mlx")
 
 # Security configuration
 API_KEY = os.getenv("API_KEY", None)  # Set API_KEY environment variable to enable authentication
-CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:8002,http://127.0.0.1:8002").split(",")
+_DEFAULT_CORS = "http://localhost:8002,http://127.0.0.1:8002,https://localhost,http://localhost,https://192.168.178.20,http://192.168.178.20"
+CORS_ORIGINS = os.getenv("CORS_ORIGINS", _DEFAULT_CORS).split(",")
 CORS_ORIGINS = [origin.strip() for origin in CORS_ORIGINS if origin.strip()]
+# Production: require API key and disallow CORS *
+if IS_PRODUCTION and (not CORS_ORIGINS or "*" in CORS_ORIGINS):
+    logger.warning("Production: CORS_ORIGINS must be set and must not contain '*'. Using default restricted list.")
+    CORS_ORIGINS = [o for o in _DEFAULT_CORS.split(",") if o.strip()]
 
 # Allowed audio MIME types
 ALLOWED_MIME_TYPES = {
@@ -267,7 +279,12 @@ async def lifespan(app: FastAPI):
         logger.error("=" * 60)
     yield
 
-app = FastAPI(lifespan=lifespan)
+app = FastAPI(
+    lifespan=lifespan,
+    docs_url=None if IS_PRODUCTION else "/docs",
+    redoc_url=None if IS_PRODUCTION else "/redoc",
+    openapi_url=None if IS_PRODUCTION else "/openapi.json",
+)
 
 _PATH_NORM_RE = re.compile(r'/+')
 
@@ -296,7 +313,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 class APIKeyMiddleware(BaseHTTPMiddleware):
     """Middleware to validate API key if configured."""
     async def dispatch(self, request: Request, call_next):
-        # Skip authentication for health check and root endpoints
+        # Skip authentication for health check and root endpoints (docs/redoc disabled in production)
         if request.url.path in ["/", "/health", "/docs", "/openapi.json", "/redoc"]:
             return await call_next(request)
         
@@ -331,10 +348,13 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
 app.add_middleware(APIKeyMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(NormalizePathMiddleware)
+# When CORS_ORIGINS is ["*"], use allow_origins=["*"] with allow_credentials=False (browser requirement)
+_cors_origins = CORS_ORIGINS if CORS_ORIGINS else ["http://localhost:8002", "http://127.0.0.1:8002"]
+_cors_allow_credentials = _cors_origins != ["*"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=CORS_ORIGINS if CORS_ORIGINS else ["http://localhost:8002", "http://127.0.0.1:8002"],
-    allow_credentials=True,
+    allow_origins=_cors_origins,
+    allow_credentials=_cors_allow_credentials,
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization", "X-API-Key"],
     expose_headers=["*"]
@@ -403,7 +423,12 @@ def extract_text(r):
     if isinstance(r, dict):
         if 'segments' in r and r['segments']:
             return ' '.join(seg.get('text', '') if isinstance(seg, dict) else str(seg) for seg in r['segments'])
-        return r.get('text', '') or str(r)
+        text = r.get('text', '')
+        if text:
+            return text
+        if r.get('segments') == []:
+            return ''
+        return str(r)
     return str(r)
 
 def clean_text(text: str) -> str:
@@ -542,14 +567,18 @@ async def create_transcription(file: UploadFile = File(...), model_name: str = F
         with open(p, 'wb') as f:
             f.write(file_content)
         try:
-            r = model.transcribe(p, language="de")
-        except TypeError:
-            r = model.transcribe(p)
+            try:
+                r = model.transcribe(p, language="de")
+            except TypeError:
+                r = model.transcribe(p)
+        except Exception as e:
+            logger.exception("Transcription failed")
+            raise HTTPException(status_code=500, detail="Transcription failed") from e
         t = clean_text(extract_text(r))
         segments = extract_segments(r)
         
         if response_format == "text":
-            return t
+            return Response(content=t, media_type="text/plain; charset=utf-8")
         else:
             return TranscriptionResponse(
                 text=t,
@@ -573,16 +602,22 @@ if __name__ == "__main__":
         os.environ["PARAKEET_MODEL"] = a.model
     
     port = a.port or int(os.getenv("PORT", 8002))
-    
+
+    # Production: require API key
+    if IS_PRODUCTION and not API_KEY:
+        logger.error("ENV=production requires API_KEY to be set. Set API_KEY in the environment and restart.")
+        sys.exit(1)
+
     # Log security configuration
+    if IS_PRODUCTION:
+        logger.info("Running in PRODUCTION mode (docs disabled, CORS restricted)")
     if API_KEY:
         logger.info("API key authentication: ENABLED")
     else:
         logger.warning("API key authentication: DISABLED (set API_KEY environment variable to enable)")
-    
     logger.info(f"CORS allowed origins: {CORS_ORIGINS}")
-    if "*" in CORS_ORIGINS or len(CORS_ORIGINS) == 0:
-        logger.warning("CORS is open to all origins. Restrict CORS_ORIGINS for production!")
+    if not IS_PRODUCTION and ("*" in CORS_ORIGINS or len(CORS_ORIGINS) == 0):
+        logger.warning("CORS is open to all origins. For production set ENV=production and CORS_ORIGINS to your allowed origins.")
     
     # Validate system requirements
     if not a.skip_validation:
@@ -595,10 +630,11 @@ if __name__ == "__main__":
             logger.error(f"Port {port} is already in use. Please choose a different port.")
             sys.exit(1)
     
-    # Configure uvicorn
+    # Bind to localhost only so all traffic goes via nginx (set BIND=0.0.0.0 to allow direct access)
+    host = os.getenv("BIND", "127.0.0.1")
     uvicorn.run(
         app,
-        host="0.0.0.0",
+        host=host,
         port=port
     )
 

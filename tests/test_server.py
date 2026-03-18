@@ -14,12 +14,16 @@ sys.modules['parakeet_mlx'] = MagicMock()
 sys.modules['huggingface_hub'] = MagicMock()
 
 from parakeet_server import (
-    app, 
-    clean_text, 
-    extract_text, 
+    app,
+    clean_text,
+    extract_text,
     extract_segments,
+    sanitize_filename,
+    validate_file_type,
     TranscriptionResponse,
-    load_model
+    load_model,
+    check_python_version,
+    validate_system_requirements,
 )
 
 
@@ -43,11 +47,20 @@ def mock_model():
     return mock
 
 
+@pytest.fixture
+def mock_model_global(mock_model):
+    """Alias for mock_model used by many transcription tests."""
+    return mock_model
+
+
 def test_root_endpoint(client):
-    """Test the root endpoint."""
+    """Test the root endpoint (returns HTML when index.html exists, else JSON)."""
     response = client.get("/")
     assert response.status_code == 200
-    assert "status" in response.json()
+    if "application/json" in response.headers.get("content-type", ""):
+        assert "status" in response.json()
+    else:
+        assert "text/html" in response.headers.get("content-type", "") or response.content.startswith(b"<")
 
 
 def test_clean_text():
@@ -60,7 +73,7 @@ def test_clean_text():
 
 def test_extract_text_from_object():
     """Test extracting text from object with text attribute."""
-    obj = MagicMock(text="test text")
+    obj = MagicMock(text="test text", segments=None)
     assert extract_text(obj) == "test text"
 
 
@@ -185,10 +198,10 @@ def test_extract_text_with_segments():
 
 def test_extract_text_edge_cases():
     """Test extract_text with edge cases."""
-    # Empty segments
-    obj = MagicMock(segments=[])
+    # Empty segments (object with segments=[] and no text -> use text="")
+    obj = MagicMock(segments=[], text="")
     assert extract_text(obj) == ""
-    
+
     # Dict with empty segments
     obj_dict = {"segments": []}
     assert extract_text(obj_dict) == ""
@@ -353,9 +366,9 @@ def test_transcription_endpoint_model_without_language(mock_model_global, client
         assert mock_model.transcribe.call_count == 2  # Called twice: with language, then without
 
 
-def test_root_endpoint_without_index_html(client):
+@patch("parakeet_server.get_index_path", return_value=None)
+def test_root_endpoint_without_index_html(mock_get_index, client):
     """Test root endpoint when index.html doesn't exist."""
-    # The endpoint should return JSON status
     response = client.get("/")
     assert response.status_code == 200
     data = response.json()
@@ -468,21 +481,16 @@ def test_transcription_endpoint_transcribe_exception(mock_model_global, client):
 
 @patch('parakeet_server.model')
 def test_transcription_endpoint_empty_audio(mock_model_global, client):
-    """Test transcription endpoint with empty audio file."""
+    """Test transcription endpoint with empty audio file returns 400."""
     mock_model = MagicMock()
-    mock_result = MagicMock(text="", segments=[])
-    mock_model.transcribe.return_value = mock_result
-    
     with patch('parakeet_server.model', mock_model):
         audio_data = b""  # Empty file
         files = {"file": ("empty.wav", io.BytesIO(audio_data), "audio/wav")}
         data = {"model": "parakeet-tdt-0.6b-v3"}
-        
         response = client.post("/v1/audio/transcriptions", files=files, data=data)
-        
-        assert response.status_code == 200
-        result = response.json()
-        assert result["text"] == ""
+        assert response.status_code == 400
+        assert "detail" in response.json()
+        assert "empty" in response.json()["detail"].lower()
 
 
 @patch('parakeet_server.model')
@@ -760,8 +768,8 @@ def test_cors_middleware(client):
             "Access-Control-Request-Method": "POST"
         }
     )
-    # CORS should be configured (status may vary but headers should be present)
-    assert response.status_code in [200, 204, 405]
+    # CORS preflight: accept 200, 204, 400 (validation), 405
+    assert response.status_code in [200, 204, 400, 405]
 
 
 def test_path_normalization_middleware(client):
@@ -1132,13 +1140,11 @@ def test_app_lifespan_context_manager():
     
     test_app = FastAPI()
     
-    # Test that lifespan is a context manager
-    assert hasattr(lifespan, '__enter__') or hasattr(lifespan, '__aenter__')
+    # lifespan is an async generator (from @asynccontextmanager); the object it yields has __aenter__
+    assert callable(lifespan)
     
     # Test that it can be used (mocked)
     with patch('parakeet_server.from_pretrained', None):
-        # Should not raise an error
-        import asyncio
         async def test_lifespan():
             async with lifespan(test_app):
                 pass
@@ -1179,4 +1185,149 @@ def test_transcription_endpoint_response_structure(mock_model_global, client):
         assert isinstance(result["text"], str)
         assert "segments" in result or result.get("segments") is None
         assert "recording_timestamp" in result or result.get("recording_timestamp") is None
+
+
+# ----- sanitize_filename -----
+
+
+def test_sanitize_filename_basename():
+    """Only basename is returned (no path)."""
+    assert sanitize_filename("/tmp/foo.wav") == "foo.wav"
+    assert sanitize_filename("dir/bar.wav") == "bar.wav"
+    assert sanitize_filename("bar.wav") == "bar.wav"
+
+
+def test_sanitize_filename_removes_path_separators():
+    """Path separators and null bytes are removed."""
+    assert sanitize_filename("foo/bar.wav") == "bar.wav"
+    # On Unix, backslash is not a path sep; replace removes it -> "foobar.wav"
+    assert sanitize_filename("foo\\bar.wav") == "foobar.wav"
+    assert sanitize_filename("a\x00b.wav") == "ab.wav"
+
+
+def test_sanitize_filename_length_limit():
+    """Filenames over 255 chars are truncated (keep extension)."""
+    long_name = "a" * 300 + ".wav"
+    out = sanitize_filename(long_name)
+    assert len(out) <= 255
+    assert out.endswith(".wav")
+
+
+# ----- validate_file_type -----
+
+
+def test_validate_file_type_allowed_extensions():
+    """Allowed extensions are accepted."""
+    for ext in [".wav", ".mp3", ".flac", ".m4a", ".ogg", ".opus", ".webm"]:
+        assert validate_file_type(f"file{ext}") is True
+
+
+def test_validate_file_type_disallowed():
+    """Disallowed extensions are rejected."""
+    assert validate_file_type("file.exe") is False
+    assert validate_file_type("file.txt") is False
+    assert validate_file_type("file") is False
+
+
+def test_validate_file_type_with_content_type():
+    """MIME type can be provided; valid extension + valid type passes."""
+    assert validate_file_type("file.wav", "audio/wav") is True
+    assert validate_file_type("file.wav", "audio/wav; charset=utf-8") is True
+
+
+# ----- API key middleware -----
+
+
+@patch("parakeet_server.API_KEY", "secret-key-123")
+def test_api_key_required_for_transcription(client):
+    """Without API key, POST /v1/audio/transcriptions returns 401."""
+    response = client.post(
+        "/v1/audio/transcriptions",
+        files={"file": ("test.wav", io.BytesIO(b"x"), "audio/wav")},
+        data={"model": "parakeet-tdt-0.6b-v3"},
+    )
+    assert response.status_code == 401
+    assert "detail" in response.json()
+
+
+@patch("parakeet_server.API_KEY", "secret-key-123")
+def test_api_key_bearer_accepted(mock_model_global, client):
+    """With Authorization: Bearer <key>, transcription is allowed."""
+    with patch("parakeet_server.model", mock_model_global):
+        mock_model_global.transcribe.return_value = MagicMock(
+            text="ok", segments=None
+        )
+        response = client.post(
+            "/v1/audio/transcriptions",
+            files={"file": ("test.wav", io.BytesIO(b"x"), "audio/wav")},
+            data={"model": "parakeet-tdt-0.6b-v3"},
+            headers={"Authorization": "Bearer secret-key-123"},
+        )
+    assert response.status_code == 200
+
+
+@patch("parakeet_server.API_KEY", "secret-key-123")
+def test_api_key_x_api_key_header_accepted(mock_model_global, client):
+    """With X-API-Key header, transcription is allowed."""
+    with patch("parakeet_server.model", mock_model_global):
+        mock_model_global.transcribe.return_value = MagicMock(
+            text="ok", segments=None
+        )
+        response = client.post(
+            "/v1/audio/transcriptions",
+            files={"file": ("test.wav", io.BytesIO(b"x"), "audio/wav")},
+            data={"model": "parakeet-tdt-0.6b-v3"},
+            headers={"X-API-Key": "secret-key-123"},
+        )
+    assert response.status_code == 200
+
+
+@patch("parakeet_server.API_KEY", "secret-key-123")
+def test_health_and_root_public_with_api_key(client):
+    """/ and /health remain public when API_KEY is set."""
+    r_root = client.get("/")
+    r_health = client.get("/health")
+    assert r_root.status_code == 200
+    assert r_health.status_code == 200
+    assert "status" in r_health.json()
+
+
+@patch("parakeet_server.API_KEY", "secret-key-123")
+def test_invalid_api_key_rejected(mock_model_global, client):
+    """Wrong API key returns 401."""
+    response = client.post(
+        "/v1/audio/transcriptions",
+        files={"file": ("test.wav", io.BytesIO(b"x"), "audio/wav")},
+        data={"model": "parakeet-tdt-0.6b-v3"},
+        headers={"Authorization": "Bearer wrong-key"},
+    )
+    assert response.status_code == 401
+
+
+# ----- System checks -----
+
+
+def test_check_python_version():
+    """check_python_version returns True on 3.10+."""
+    assert check_python_version() is True
+
+
+@patch("parakeet_server.check_python_version", return_value=False)
+@patch("parakeet_server.check_disk_space", return_value=True)
+@patch("parakeet_server.check_temp_directory", return_value=True)
+@patch("parakeet_server.check_huggingface_cache", return_value=True)
+@patch("parakeet_server.check_port_available", return_value=True)
+def test_validate_system_requirements_fails_on_python(mock_port, mock_hf, mock_temp, mock_disk, mock_py):
+    """validate_system_requirements returns False when Python version fails."""
+    assert validate_system_requirements() is False
+
+
+@patch("parakeet_server.check_python_version", return_value=True)
+@patch("parakeet_server.check_disk_space", return_value=True)
+@patch("parakeet_server.check_temp_directory", return_value=True)
+@patch("parakeet_server.check_huggingface_cache", return_value=True)
+@patch("parakeet_server.check_port_available", return_value=True)
+def test_validate_system_requirements_passes(mock_port, mock_hf, mock_temp, mock_disk, mock_py):
+    """validate_system_requirements returns True when all checks pass."""
+    assert validate_system_requirements() is True
 

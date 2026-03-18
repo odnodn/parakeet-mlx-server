@@ -204,8 +204,9 @@
                 formData.append('response_format', 'json');
                 formData.append('recording_timestamp', recordingTimestamp);
 
-                // Use absolute URL based on current origin
-                const apiUrl = `${window.location.origin}/v1/audio/transcriptions`;
+                // Use current origin + path base (works when served at e.g. /stt/)
+                const base = window.location.pathname.replace(/\/$/, '') || '';
+                const apiUrl = `${window.location.origin}${base}/v1/audio/transcriptions`;
                 
                 const response = await fetch(apiUrl, {
                     method: 'POST',

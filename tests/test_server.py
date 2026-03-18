@@ -1292,6 +1292,13 @@ def test_health_and_root_public_with_api_key(client):
     assert "status" in r_health.json()
 
 
+def test_liveness_endpoint(client):
+    """GET /live returns 200 and status ok (liveness probe)."""
+    r = client.get("/live")
+    assert r.status_code == 200
+    assert r.json() == {"status": "ok"}
+
+
 @patch("parakeet_server.API_KEY", "secret-key-123")
 def test_invalid_api_key_rejected(mock_model_global, client):
     """Wrong API key returns 401."""

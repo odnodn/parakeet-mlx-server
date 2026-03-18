@@ -92,6 +92,12 @@ MAX_FILE_SIZE = 100 * 1024 * 1024
 MAX_CONCURRENT_TRANSCRIPTIONS = max(1, int(os.getenv("MAX_CONCURRENT_TRANSCRIPTIONS", "2")))
 transcription_semaphore = asyncio.Semaphore(MAX_CONCURRENT_TRANSCRIPTIONS)
 
+# Max time for a single transcription (seconds); prevents stuck requests
+TRANSCRIPTION_TIMEOUT = max(60, float(os.getenv("TRANSCRIPTION_TIMEOUT", "600")))
+
+# Set during shutdown so new transcriptions are rejected (graceful drain)
+_shutting_down = False
+
 def check_python_version():
     """Check if Python version is 3.10 or higher."""
     if sys.version_info < (3, 10):
@@ -285,6 +291,9 @@ async def lifespan(app: FastAPI):
         logger.error(f"  {sys.executable} -m pip install parakeet-mlx")
         logger.error("=" * 60)
     yield
+    global _shutting_down
+    _shutting_down = True
+    logger.info("Shutdown: draining (new transcriptions will receive 503)")
 
 app = FastAPI(
     lifespan=lifespan,
@@ -361,7 +370,7 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
     """Middleware to validate API key if configured."""
     async def dispatch(self, request: Request, call_next):
         # Skip authentication for health check and root endpoints (docs/redoc disabled in production)
-        if request.url.path in ["/", "/health", "/docs", "/openapi.json", "/redoc"]:
+        if request.url.path in ["/", "/health", "/live", "/docs", "/openapi.json", "/redoc"]:
             return await call_next(request)
         
         # If API key is configured, validate it
@@ -432,6 +441,12 @@ async def root():
     if index_path:
         return FileResponse(index_path, media_type="text/html")
     return {"status": "ok" if model else "error"}
+
+@app.get("/live")
+async def liveness():
+    """Liveness probe: returns 200 if the process is up. Use for k8s livenessProbe."""
+    return {"status": "ok"}
+
 
 @app.get("/health")
 async def health_check():
@@ -574,6 +589,8 @@ async def options_transcription():
 async def create_transcription(file: UploadFile = File(...), model_name: str = Form("parakeet-tdt-0.6b-v3", alias="model"),
                                response_format: Optional[str] = Form("json"),
                                recording_timestamp: Optional[str] = Form(None)):
+    if _shutting_down:
+        raise HTTPException(status_code=503, detail="Server is shutting down")
     if not model:
         raise HTTPException(status_code=503, detail="Model not loaded")
 
@@ -616,7 +633,16 @@ async def create_transcription(file: UploadFile = File(...), model_name: str = F
                 except TypeError:
                     return model.transcribe(p)
             try:
-                r = await asyncio.to_thread(_transcribe)
+                r = await asyncio.wait_for(
+                    asyncio.to_thread(_transcribe),
+                    timeout=TRANSCRIPTION_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                logger.error("Transcription timed out after %.0fs", TRANSCRIPTION_TIMEOUT)
+                raise HTTPException(
+                    status_code=504,
+                    detail=f"Transcription timed out (max {int(TRANSCRIPTION_TIMEOUT)}s)",
+                )
             except Exception as e:
                 logger.exception("Transcription failed: %s", e)
                 if IS_PRODUCTION:

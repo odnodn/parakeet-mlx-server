@@ -15,6 +15,7 @@ Set before starting the server (or in the LaunchAgent plist when using `install_
 | `LOG_LEVEL` | Optional | `INFO` or `WARNING` |
 | `ALLOW_LAN` | Optional | `0` in production (use explicit `CORS_ORIGINS` instead of `*`) |
 | `MAX_CONCURRENT_TRANSCRIPTIONS` | Optional | `2` (limit simultaneous jobs; 1–2 is stable for MLX) |
+| `TRANSCRIPTION_TIMEOUT` | Optional | `600` (max seconds per transcription; avoids stuck requests) |
 | `UVICORN_TIMEOUT_KEEP_ALIVE` | Optional | `30` (seconds) |
 | `UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN` | Optional | `15.0` (seconds) |
 
@@ -75,7 +76,7 @@ The install script writes `API_KEY`, `ENV`, `CORS_ORIGINS`, and `LOG_LEVEL` (if 
 | **HTTPS** | Terminate TLS at nginx (e.g. Let’s Encrypt). Do not expose the app directly on the internet without TLS. |
 | **Rate limiting** | In nginx, use `limit_req_zone` / `limit_req` on the `/stt/` location to cap requests per IP (e.g. 10 req/s). Reduces abuse and load. |
 | **Log rotation** | LaunchAgent writes to `logs/parakeet-server.log` and `parakeet-server.err`. Use macOS `newsyslog` or a cron job to rotate/compress so disks don’t fill. |
-| **Health checks** | Poll `GET /health` (or `GET /stt/health` via nginx) from a monitor or load balancer. Treat non-200 or `"status":"unhealthy"` as down. |
+| **Health checks** | **Liveness:** `GET /live` always returns 200 if the process is up (e.g. k8s livenessProbe). **Readiness:** `GET /health` returns 200 only when the model is loaded; use for readiness or “can accept work” checks. |
 | **Dependencies** | Run `pip list --outdated` or `pip-audit` occasionally; update `requirements.txt` and redeploy after testing. |
 | **Firewall** | If the app binds to `0.0.0.0`, restrict port 8002 to trusted IPs (e.g. nginx on the same host). Prefer `BIND=127.0.0.1` and only nginx on a public interface. |
 | **Secrets** | Do not commit `.env` or plist files containing `API_KEY`. The LaunchAgent plist lives in `~/Library/LaunchAgents/` and is not in the repo. |

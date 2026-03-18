@@ -127,8 +127,8 @@ def test_transcription_endpoint_no_model(mock_model_global, client):
                     files={"file": ("test.wav", f, "audio/wav")},
                     data={"model": "parakeet-tdt-0.6b-v3"}
                 )
-            # Should fail with 500 if model not loaded
-            assert response.status_code == 500
+            # Should fail with 503 (service unavailable) if model not loaded
+            assert response.status_code == 503
         finally:
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)

@@ -18,6 +18,9 @@ import shutil
 import socket
 import hashlib
 import secrets
+import time
+import uuid
+import asyncio
 from datetime import datetime
 from pathlib import Path
 
@@ -84,6 +87,10 @@ ALLOWED_EXTENSIONS = {".wav", ".mp3", ".flac", ".m4a", ".aac", ".ogg", ".opus", 
 
 # Maximum file size (100MB)
 MAX_FILE_SIZE = 100 * 1024 * 1024
+
+# Concurrency: limit simultaneous transcriptions (MLX is single-threaded; 1–2 is stable)
+MAX_CONCURRENT_TRANSCRIPTIONS = max(1, int(os.getenv("MAX_CONCURRENT_TRANSCRIPTIONS", "2")))
+transcription_semaphore = asyncio.Semaphore(MAX_CONCURRENT_TRANSCRIPTIONS)
 
 def check_python_version():
     """Check if Python version is 3.10 or higher."""
@@ -286,7 +293,47 @@ app = FastAPI(
     openapi_url=None if IS_PRODUCTION else "/openapi.json",
 )
 
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """Ensure unhandled exceptions never leak details in production."""
+    logger.exception("Unhandled exception: %s", exc)
+    from fastapi.responses import JSONResponse
+    detail = "Internal server error" if IS_PRODUCTION else str(exc)
+    return JSONResponse(status_code=500, content={"detail": detail})
+
+
 _PATH_NORM_RE = re.compile(r'/+')
+
+
+class RequestIdMiddleware(BaseHTTPMiddleware):
+    """Assign a request ID for tracing; echo X-Request-ID if provided by client."""
+    async def dispatch(self, request: Request, call_next):
+        request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+        request.state.request_id = request_id
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = request_id
+        return response
+
+
+class RequestLoggingMiddleware(BaseHTTPMiddleware):
+    """Log request method, path, status, duration; omit body for stability and privacy."""
+    async def dispatch(self, request: Request, call_next):
+        start = time.perf_counter()
+        response = await call_next(request)
+        duration_ms = (time.perf_counter() - start) * 1000
+        request_id = getattr(request.state, "request_id", "")
+        extra = f" request_id={request_id}" if request_id else ""
+        logger.info(
+            "%s %s %s %.1fms%s",
+            request.method,
+            request.url.path,
+            response.status_code,
+            duration_ms,
+            extra,
+        )
+        return response
+
 
 class NormalizePathMiddleware(BaseHTTPMiddleware):
     """Middleware to normalize duplicate slashes in paths."""
@@ -344,10 +391,12 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
         
         return await call_next(request)
 
-# Add middlewares in order (API key, security headers, path normalization, then CORS)
+# Add middlewares (outer = last added = runs first): request ID, logging, then auth, security, path, CORS
 app.add_middleware(APIKeyMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(NormalizePathMiddleware)
+app.add_middleware(RequestLoggingMiddleware)
+app.add_middleware(RequestIdMiddleware)
 # When CORS_ORIGINS is ["*"], use allow_origins=["*"] with allow_credentials=False (browser requirement)
 _cors_origins = CORS_ORIGINS if CORS_ORIGINS else ["http://localhost:8002", "http://127.0.0.1:8002"]
 _cors_allow_credentials = _cors_origins != ["*"]
@@ -526,70 +575,67 @@ async def create_transcription(file: UploadFile = File(...), model_name: str = F
                                response_format: Optional[str] = Form("json"),
                                recording_timestamp: Optional[str] = Form(None)):
     if not model:
-        raise HTTPException(status_code=500, detail="Model not loaded")
-    
+        raise HTTPException(status_code=503, detail="Model not loaded")
+
     # Validate file presence
     if not file.filename:
         raise HTTPException(status_code=400, detail="No filename provided")
-    
-    # Sanitize filename
+
     sanitized_filename = sanitize_filename(file.filename)
     if sanitized_filename != file.filename:
-        logger.warning(f"Filename sanitized: {file.filename} -> {sanitized_filename}")
-    
-    # Validate file type
+        logger.warning("Filename sanitized: %s -> %s", file.filename, sanitized_filename)
+
     if not validate_file_type(sanitized_filename, file.content_type):
         raise HTTPException(
             status_code=400,
             detail=f"Invalid file type. Allowed types: {', '.join(sorted(ALLOWED_EXTENSIONS))}"
         )
-    
-    # Read and validate file size
+
     file_content = await file.read()
     if len(file_content) > MAX_FILE_SIZE:
         raise HTTPException(
             status_code=400,
             detail=f"File too large. Maximum size is {MAX_FILE_SIZE / (1024*1024):.0f}MB"
         )
-    
-    # Check if file is empty
     if len(file_content) == 0:
         raise HTTPException(status_code=400, detail="Empty file provided")
-    
-    # Determine file extension for temp file
+
     ext = Path(sanitized_filename).suffix.lower() or ".wav"
     if ext not in ALLOWED_EXTENSIONS:
-        ext = ".wav"  # Default fallback
-    
+        ext = ".wav"
+
     with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
         p = tmp.name
     try:
-        with open(p, 'wb') as f:
+        with open(p, "wb") as f:
             f.write(file_content)
-        try:
+        async with transcription_semaphore:
+            def _transcribe():
+                try:
+                    return model.transcribe(p, language="de")
+                except TypeError:
+                    return model.transcribe(p)
             try:
-                r = model.transcribe(p, language="de")
-            except TypeError:
-                r = model.transcribe(p)
-        except Exception as e:
-            logger.exception("Transcription failed")
-            raise HTTPException(status_code=500, detail="Transcription failed") from e
+                r = await asyncio.to_thread(_transcribe)
+            except Exception as e:
+                logger.exception("Transcription failed: %s", e)
+                if IS_PRODUCTION:
+                    raise HTTPException(status_code=500, detail="Transcription failed")
+                raise HTTPException(status_code=500, detail="Transcription failed") from e
         t = clean_text(extract_text(r))
         segments = extract_segments(r)
-        
         if response_format == "text":
             return Response(content=t, media_type="text/plain; charset=utf-8")
-        else:
-            return TranscriptionResponse(
-                text=t,
-                recording_timestamp=recording_timestamp,
-                segments=segments
-            )
+        return TranscriptionResponse(
+            text=t,
+            recording_timestamp=recording_timestamp,
+            segments=segments,
+        )
     finally:
         try:
             os.remove(p)
-        except Exception:
-            pass
+        except OSError as e:
+            logger.warning("Could not remove temp file %s: %s", p, e)
 
 if __name__ == "__main__":
     import uvicorn
@@ -630,11 +676,14 @@ if __name__ == "__main__":
             logger.error(f"Port {port} is already in use. Please choose a different port.")
             sys.exit(1)
     
-    # Bind to localhost only so all traffic goes via nginx (set BIND=0.0.0.0 to allow direct access)
     host = os.getenv("BIND", "127.0.0.1")
+    timeout_keep_alive = int(os.getenv("UVICORN_TIMEOUT_KEEP_ALIVE", "30"))
+    timeout_graceful_shutdown = float(os.getenv("UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN", "15.0"))
     uvicorn.run(
         app,
         host=host,
-        port=port
+        port=port,
+        timeout_keep_alive=timeout_keep_alive,
+        timeout_graceful_shutdown=timeout_graceful_shutdown,
     )
 

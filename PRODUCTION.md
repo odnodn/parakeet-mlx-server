@@ -14,6 +14,9 @@ Set before starting the server (or in the LaunchAgent plist when using `install_
 | `BIND` | Optional | `127.0.0.1` if only nginx talks to the app; `0.0.0.0` if clients hit the host directly |
 | `LOG_LEVEL` | Optional | `INFO` or `WARNING` |
 | `ALLOW_LAN` | Optional | `0` in production (use explicit `CORS_ORIGINS` instead of `*`) |
+| `MAX_CONCURRENT_TRANSCRIPTIONS` | Optional | `2` (limit simultaneous jobs; 1–2 is stable for MLX) |
+| `UVICORN_TIMEOUT_KEEP_ALIVE` | Optional | `30` (seconds) |
+| `UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN` | Optional | `15.0` (seconds) |
 
 Production behaviour when `ENV=production`:
 

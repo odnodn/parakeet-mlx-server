@@ -296,6 +296,14 @@ class TestEnergyDiarizationService:
         energies = svc._compute_frame_energies(samples, frame_len=8)
         assert len(energies) == 1
 
+    def test_compute_frame_energies_not_evenly_divisible(self):
+        """Remainder samples beyond the last full frame are ignored."""
+        svc = EnergyDiarizationService()
+        # 10 samples with frame_len=4 → 2 full frames, 2 samples discarded
+        samples = np.array([1.0] * 4 + [0.0] * 4 + [0.5, 0.5], dtype=np.float64)
+        energies = svc._compute_frame_energies(samples, frame_len=4)
+        assert len(energies) == 2
+
     def test_compute_frame_energies_empty(self):
         svc = EnergyDiarizationService()
         samples = np.array([], dtype=np.float64)

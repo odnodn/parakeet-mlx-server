@@ -1,0 +1,12 @@
+# Optional dependencies for speaker diarization backends
+# Install the backend(s) you need:
+
+# PyAnnote backend (neural speaker diarization)
+# Requires a HuggingFace token with access to pyannote models
+# pyannote.audio>=3.1.0
+
+# NeMo/Sortformer backend (NVIDIA NeMo diarization)
+# nemo_toolkit[asr]>=1.20.0
+
+# Energy backend (always available, no extra dependencies needed)
+numpy>=1.24.0

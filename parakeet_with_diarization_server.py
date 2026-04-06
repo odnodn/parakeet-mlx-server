@@ -505,7 +505,7 @@ async def liveness():
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint - returns server and model status."""
+    """Health check endpoint - returns server, model, diarization and streaming status."""
     import sys
     import shutil
     
@@ -831,7 +831,7 @@ async def create_diarized_transcription(
             raise HTTPException(status_code=500, detail="Diarization failed") from e
 
         # 3. Merge transcription with diarization
-        merged_segments: list[SpeakerSegment] = []
+        merged_segments: List[SpeakerSegment] = []
         if segments:
             merged_segments = merge_transcription_with_diarization(
                 segments, dia_result, speaker_names=effective_speaker_names
@@ -945,7 +945,7 @@ async def create_streaming_transcription(
         f.write(file_content)
 
     async def _generate():
-        chunk_paths: list[str] = []
+        chunk_paths: List[str] = []
         try:
             chunks = list(_split_wav_to_chunks(master_path, effective_chunk_duration))
             total_chunks = len(chunks)
@@ -973,7 +973,8 @@ async def create_streaming_transcription(
                         continue
                     except Exception as e:
                         logger.exception("Chunk %d transcription failed: %s", chunk_index, e)
-                        line = json.dumps({"chunk_index": chunk_index, "text": "", "is_final": is_final, "error": str(e)})
+                        error_detail = "Transcription failed" if IS_PRODUCTION else str(e)
+                        line = json.dumps({"chunk_index": chunk_index, "text": "", "is_final": is_final, "error": error_detail})
                         yield line + "\n"
                         continue
 

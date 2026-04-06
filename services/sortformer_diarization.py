@@ -197,9 +197,7 @@ class SortformerDiarizationService(DiarizationService):
                     duration = float(parts[4])
                     raw_label = parts[7]
 
-                    normalized = SortformerDiarizationService._normalize_label(
-                        raw_label
-                    )
+                    normalized = SortformerDiarizationService._normalize_label(raw_label)
                     display = label_map.get(normalized, normalized)
                     segments.append(
                         SpeakerSegment(

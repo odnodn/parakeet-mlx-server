@@ -163,7 +163,7 @@ class EnergyDiarizationService(DiarizationService):
         # Down-mix to mono.
         if n_channels > 1:
             samples = samples.reshape(-1, n_channels).mean(axis=1)
-        # Normalise to [-1, 1].
+        # Normalize to [-1, 1].
         max_val = float(2 ** (8 * sampwidth - 1))
         samples /= max_val
         return samples, sample_rate

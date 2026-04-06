@@ -116,7 +116,7 @@ class PyannoteDiarizationService(DiarizationService):
         unique_labels: set[str] = set()
 
         for turn, _, speaker_label in diarization.itertracks(yield_label=True):
-            # Normalise label to SPEAKER_<n> format.
+            # Normalize label to SPEAKER_<n> format.
             normalized = self._normalize_label(speaker_label)
             display = label_map.get(normalized, normalized)
             unique_labels.add(display)
@@ -156,7 +156,7 @@ class PyannoteDiarizationService(DiarizationService):
         """Ensure the speaker label uses the ``SPEAKER_<n>`` convention."""
         if label.startswith("SPEAKER_"):
             return label
-        # pyannote may return labels like "SPEAKER_00"; normalise to int index.
+        # pyannote may return labels like "SPEAKER_00"; normalize to int index.
         try:
             idx = int(label.replace("SPEAKER_", "").lstrip("0") or "0")
             return f"SPEAKER_{idx}"

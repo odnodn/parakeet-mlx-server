@@ -12,17 +12,15 @@ export function useMicrophone() {
     if (granted) {
       const mics = await getMicrophones();
       setDevices(mics);
-      if (mics.length > 0 && !selectedDeviceId) {
-        setSelectedDeviceId(mics[0].deviceId);
-      }
+      setSelectedDeviceId((prev) => (prev || (mics.length > 0 ? mics[0].deviceId : '')));
     }
-  }, [selectedDeviceId]);
+  }, []);
 
   useEffect(() => {
-    refreshDevices();
-    navigator.mediaDevices.addEventListener('devicechange', refreshDevices);
+    const handler = () => { refreshDevices(); };
+    navigator.mediaDevices.addEventListener('devicechange', handler);
     return () => {
-      navigator.mediaDevices.removeEventListener('devicechange', refreshDevices);
+      navigator.mediaDevices.removeEventListener('devicechange', handler);
     };
   }, [refreshDevices]);
 

@@ -34,10 +34,11 @@ export function TranscriptionView({
   streamText,
   isTranscribing,
 }: TranscriptionViewProps) {
+  const speakers = result?.speakers;
   const allSpeakers = useMemo(() => {
-    if (!result?.speakers) return [];
-    return Array.from(new Set(result.speakers.map((s) => s.speaker)));
-  }, [result?.speakers]);
+    if (!speakers) return [];
+    return Array.from(new Set(speakers.map((s) => s.speaker)));
+  }, [speakers]);
 
   const handleCopy = () => {
     const text = result?.text || streamText || '';

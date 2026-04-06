@@ -50,7 +50,10 @@ class LocalStorageBackend implements StorageBackend {
 }
 
 class RestStorageBackend implements StorageBackend {
-  constructor(private baseUrl: string) {}
+  private baseUrl: string;
+  constructor(baseUrl: string) {
+    this.baseUrl = baseUrl;
+  }
 
   async saveRecording(recording: Recording): Promise<void> {
     const formData = new FormData();

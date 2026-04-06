@@ -288,6 +288,8 @@ export function PatientManager() {
               {filteredPatients.map((patient) => (
                 <div
                   key={patient.id}
+                  role="button"
+                  tabIndex={0}
                   className={cn(
                     'flex items-center gap-2 rounded-md px-3 py-2 text-sm cursor-pointer transition-colors',
                     selectedPatientId === patient.id
@@ -295,6 +297,7 @@ export function PatientManager() {
                       : 'hover:bg-muted',
                   )}
                   onClick={() => selectPatient(patient.id)}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') selectPatient(patient.id); }}
                 >
                   {editingId === patient.id ? (
                     <>

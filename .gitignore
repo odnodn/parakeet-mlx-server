@@ -83,3 +83,7 @@ server.log
 # Generated / local
 *.generated
 *.plist.generated
+
+# Frontend
+frontend/node_modules/
+frontend/dist/

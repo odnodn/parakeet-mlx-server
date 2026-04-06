@@ -973,8 +973,7 @@ async def create_streaming_transcription(
                         continue
                     except Exception as e:
                         logger.exception("Chunk %d transcription failed: %s", chunk_index, e)
-                        error_detail = "Transcription failed" if IS_PRODUCTION else str(e)
-                        line = json.dumps({"chunk_index": chunk_index, "text": "", "is_final": is_final, "error": error_detail})
+                        line = json.dumps({"chunk_index": chunk_index, "text": "", "is_final": is_final, "error": "Transcription failed"})
                         yield line + "\n"
                         continue
 

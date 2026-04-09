@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import type { RecordingState } from '@/types';
 
 interface UseRecordingOptions {
@@ -15,6 +15,10 @@ export function useRecording(options: UseRecordingOptions = {}) {
   const startTimeRef = useRef(0);
   const pausedDurationRef = useRef(0);
   const streamRef = useRef<MediaStream | null>(null);
+  const optionsRef = useRef(options);
+  useEffect(() => {
+    optionsRef.current = options;
+  });
 
   const startTimer = useCallback(() => {
     startTimeRef.current = Date.now();
@@ -38,8 +42,8 @@ export function useRecording(options: UseRecordingOptions = {}) {
     setDuration(0);
 
     const constraints: MediaStreamConstraints = {
-      audio: options.deviceId
-        ? { deviceId: { exact: options.deviceId } }
+      audio: optionsRef.current.deviceId
+        ? { deviceId: { exact: optionsRef.current.deviceId } }
         : true,
     };
 
@@ -60,14 +64,14 @@ export function useRecording(options: UseRecordingOptions = {}) {
 
     mediaRecorder.onstop = () => {
       const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
-      options.onDataAvailable?.(blob);
+      optionsRef.current.onDataAvailable?.(blob);
     };
 
     mediaRecorderRef.current = mediaRecorder;
     mediaRecorder.start(1000);
     setState('recording');
     startTimer();
-  }, [options, startTimer]);
+  }, [startTimer]);
 
   const pause = useCallback(() => {
     if (mediaRecorderRef.current?.state === 'recording') {

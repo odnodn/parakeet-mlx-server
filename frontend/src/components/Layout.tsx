@@ -7,8 +7,11 @@ import {
   Bot,
   Stethoscope,
   Settings,
+  FileText,
+  Loader2,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { Button } from '@/components/ui/button';
 import { AudioRecorder } from '@/components/AudioRecorder';
 import { AudioPlayer } from '@/components/AudioPlayer';
 import { TranscriptionView } from '@/components/TranscriptionView';
@@ -143,6 +146,34 @@ export function Layout() {
     [getBlob, reset],
   );
 
+  const handleTranscribe = useCallback(async () => {
+    if (!currentBlob || !selectedRecordingId) return;
+    reset();
+    try {
+      const transcriptionResult =
+        settings.streamingMode === 'http'
+          ? await transcribe(currentBlob, {
+              diarize: settings.diarize,
+              numSpeakers: settings.numSpeakers,
+              speakerNames: settings.speakerNames,
+            })
+          : await transcribeWithStream(currentBlob, {
+              chunkDuration: settings.chunkDuration,
+            });
+      setTranscription(selectedRecordingId, transcriptionResult);
+    } catch {
+      // Error handled in hook
+    }
+  }, [
+    currentBlob,
+    selectedRecordingId,
+    settings,
+    transcribe,
+    transcribeWithStream,
+    setTranscription,
+    reset,
+  ]);
+
   return (
     <div className="flex h-screen overflow-hidden bg-background">
       {/* Sidebar */}
@@ -210,6 +241,20 @@ export function Layout() {
                   onTrimStartChange={setTrimStart}
                   onTrimEndChange={setTrimEnd}
                 />
+                {currentBlob && selectedRecordingId && (
+                  <Button
+                    onClick={handleTranscribe}
+                    disabled={isTranscribing}
+                    className="gap-2"
+                  >
+                    {isTranscribing ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <FileText className="h-4 w-4" />
+                    )}
+                    {isTranscribing ? 'Wird transkribiert...' : 'Transkribieren'}
+                  </Button>
+                )}
                 <TranscriptionView
                   result={selectedRecording?.transcription || result}
                   streamText={streamText}

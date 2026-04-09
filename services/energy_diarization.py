@@ -170,14 +170,14 @@ class EnergyDiarizationService(DiarizationService):
             ValueError: If the file is not WAV and *ffmpeg* is not
                 available on the system ``PATH``.
         """
-        # Quick sniff: WAV files start with the 4-byte ASCII string "RIFF".
+        # Quick sniff: WAV files start with "RIFF" at offset 0 and "WAVE" at offset 8.
         try:
             with open(audio_path, "rb") as f:
-                header = f.read(4)
+                header = f.read(12)
         except OSError as exc:
             raise ValueError(f"Cannot read audio file: {exc}") from exc
 
-        if header == b"RIFF":
+        if header[:4] == b"RIFF" and header[8:12] == b"WAVE":
             return audio_path
 
         # Non-WAV → convert with ffmpeg.
@@ -199,7 +199,7 @@ class EnergyDiarizationService(DiarizationService):
                     "-i", audio_path,
                     "-ar", "16000",
                     "-ac", "1",
-                    "-sample_fmt", "s16",
+                    "-acodec", "pcm_s16le",
                     wav_path,
                 ],
                 check=True,

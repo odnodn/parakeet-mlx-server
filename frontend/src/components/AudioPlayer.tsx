@@ -27,11 +27,7 @@ export function AudioPlayer({
   const [dragging, setDragging] = useState<'start' | 'end' | null>(null);
 
   const { state, currentTime, duration, load, play, pause, resume, stop, seek } =
-    usePlayback({
-      onTimeUpdate: () => {
-        renderWaveform();
-      },
-    });
+    usePlayback();
 
   const effectiveTrimEnd = trimEnd ?? duration;
 

@@ -12,6 +12,10 @@ export function usePlayback(options: UsePlaybackOptions = {}) {
   const [duration, setDuration] = useState(0);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const urlRef = useRef<string | null>(null);
+  const optionsRef = useRef(options);
+  useEffect(() => {
+    optionsRef.current = options;
+  });
 
   const cleanup = useCallback(() => {
     if (audioRef.current) {
@@ -49,18 +53,18 @@ export function usePlayback(options: UsePlaybackOptions = {}) {
 
       audio.addEventListener('timeupdate', () => {
         setCurrentTime(audio.currentTime);
-        options.onTimeUpdate?.(audio.currentTime);
+        optionsRef.current.onTimeUpdate?.(audio.currentTime);
       });
 
       audio.addEventListener('ended', () => {
         setState('idle');
         setCurrentTime(0);
-        options.onEnded?.();
+        optionsRef.current.onEnded?.();
       });
 
       audioRef.current = audio;
     },
-    [cleanup, options]
+    [cleanup]
   );
 
   const play = useCallback(

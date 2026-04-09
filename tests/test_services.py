@@ -2,7 +2,9 @@
 
 import math
 import os
+import shutil
 import struct
+import subprocess
 import wave
 
 import numpy as np
@@ -358,6 +360,64 @@ class TestEnergyDiarizationService:
         svc = EnergyDiarizationService()
         result = svc.diarize(wav_path)
         assert isinstance(result, DiarizationResult)
+
+    def test_ensure_wav_returns_wav_unchanged(self, tmp_path):
+        """WAV files are returned as-is without conversion."""
+        wav_path = str(tmp_path / "test.wav")
+        create_test_wav(wav_path, duration=0.5)
+        result = EnergyDiarizationService._ensure_wav(wav_path)
+        assert result == wav_path
+
+    def test_ensure_wav_non_wav_without_ffmpeg(self, tmp_path, monkeypatch):
+        """Non-WAV files raise ValueError when ffmpeg is not available."""
+        fake_path = str(tmp_path / "audio.m4a")
+        with open(fake_path, "wb") as f:
+            f.write(b"\x00\x00\x00\x1cftyp")  # fake m4a header
+        monkeypatch.setattr(shutil, "which", lambda _name: None)
+        with pytest.raises(ValueError, match="not in WAV format"):
+            EnergyDiarizationService._ensure_wav(fake_path)
+
+    def test_ensure_wav_non_wav_with_ffmpeg(self, tmp_path, monkeypatch):
+        """Non-WAV files are converted when ffmpeg is available."""
+        fake_path = str(tmp_path / "audio.m4a")
+        with open(fake_path, "wb") as f:
+            f.write(b"\x00\x00\x00\x1cftyp")  # fake m4a header
+
+        # Create a real WAV file to simulate ffmpeg output
+        def fake_run(cmd, **kwargs):
+            # cmd[-1] is the output wav_path
+            create_test_wav(cmd[-1], duration=0.5)
+            return subprocess.CompletedProcess(cmd, 0)
+
+        monkeypatch.setattr(shutil, "which", lambda _name: "/usr/bin/ffmpeg")
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        result = EnergyDiarizationService._ensure_wav(fake_path)
+        assert result != fake_path
+        assert result.endswith(".wav")
+        assert os.path.exists(result)
+        os.remove(result)  # cleanup
+
+    def test_ensure_wav_missing_file(self, tmp_path):
+        """Raise ValueError for a non-existent file."""
+        with pytest.raises(ValueError, match="Cannot read audio file"):
+            EnergyDiarizationService._ensure_wav(str(tmp_path / "missing.m4a"))
+
+    def test_diarize_non_wav_with_ffmpeg(self, tmp_path, monkeypatch):
+        """diarize() handles non-WAV files via _ensure_wav conversion."""
+        fake_path = str(tmp_path / "audio.m4a")
+        with open(fake_path, "wb") as f:
+            f.write(b"\x00\x00\x00\x1cftyp")  # fake m4a header
+
+        def fake_run(cmd, **kwargs):
+            create_test_wav(cmd[-1], duration=1.0)
+            return subprocess.CompletedProcess(cmd, 0)
+
+        monkeypatch.setattr(shutil, "which", lambda _name: "/usr/bin/ffmpeg")
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        svc = EnergyDiarizationService()
+        result = svc.diarize(fake_path)
+        assert isinstance(result, DiarizationResult)
+        assert isinstance(result.segments, list)
 
 
 # ---------------------------------------------------------------------------

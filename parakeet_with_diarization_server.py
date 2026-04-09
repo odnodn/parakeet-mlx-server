@@ -286,7 +286,7 @@ def _init_diarization_service():
         )
         logger.info("Diarization service loaded: %s", diarization_service.name)
     except Exception as e:
-        logger.warning("Could not initialise diarization service: %s", e)
+        logger.error("Could not initialise diarization service: %s", e)
         diarization_service = None
 
 @asynccontextmanager

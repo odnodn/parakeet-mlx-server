@@ -10,7 +10,11 @@ always available and can serve as a fallback or be used during testing.
 """
 
 import logging
+import os
+import shutil
 import struct
+import subprocess
+import tempfile
 import wave
 from typing import List, Optional
 
@@ -77,8 +81,8 @@ class EnergyDiarizationService(DiarizationService):
         """Segment *audio_path* using energy-based silence detection.
 
         Args:
-            audio_path: Path to a **WAV** file.  Other formats must be
-                converted before calling this method.
+            audio_path: Path to an audio file.  Non-WAV formats are
+                automatically converted to WAV via *ffmpeg* if available.
             num_speakers: Number of speakers to assume (default ``2``).
             speaker_names: Optional display names for the speakers.
 
@@ -91,7 +95,17 @@ class EnergyDiarizationService(DiarizationService):
         num_speakers = num_speakers or 2
 
         logger.info("Running energy-based diarization on %s …", audio_path)
-        samples, sample_rate = self._read_wav(audio_path)
+
+        wav_path = self._ensure_wav(audio_path)
+        converted = wav_path != audio_path
+        try:
+            samples, sample_rate = self._read_wav(wav_path)
+        finally:
+            if converted:
+                try:
+                    os.remove(wav_path)
+                except OSError:
+                    pass
 
         # Compute per-frame energy.
         frame_len = int(sample_rate * self._frame_duration_ms / 1000)
@@ -141,6 +155,67 @@ class EnergyDiarizationService(DiarizationService):
         )
 
     # -- Internal helpers ----------------------------------------------------
+
+    @staticmethod
+    def _ensure_wav(audio_path: str) -> str:
+        """Return a path to a WAV version of *audio_path*.
+
+        If the file is already a WAV file it is returned unchanged.
+        Otherwise *ffmpeg* is used to transcode the file to a 16 kHz
+        mono 16-bit WAV in a temporary location.  The caller is
+        responsible for deleting the temporary file when it is no
+        longer needed.
+
+        Raises:
+            ValueError: If the file is not WAV and *ffmpeg* is not
+                available on the system ``PATH``.
+        """
+        # Quick sniff: WAV files start with "RIFF" at offset 0 and "WAVE" at offset 8.
+        try:
+            with open(audio_path, "rb") as f:
+                header = f.read(12)
+        except OSError as exc:
+            raise ValueError(f"Cannot read audio file: {exc}") from exc
+
+        if header[:4] == b"RIFF" and header[8:12] == b"WAVE":
+            return audio_path
+
+        # Non-WAV → convert with ffmpeg.
+        ffmpeg = shutil.which("ffmpeg")
+        if ffmpeg is None:
+            raise ValueError(
+                f"Audio file '{audio_path}' is not in WAV format and "
+                "ffmpeg is not installed.  Install ffmpeg or convert "
+                "the file to WAV before uploading."
+            )
+
+        fd, wav_path = tempfile.mkstemp(suffix=".wav")
+        os.close(fd)
+        try:
+            subprocess.run(
+                [
+                    ffmpeg,
+                    "-y",
+                    "-i", audio_path,
+                    "-ar", "16000",
+                    "-ac", "1",
+                    "-acodec", "pcm_s16le",
+                    wav_path,
+                ],
+                check=True,
+                capture_output=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            try:
+                os.remove(wav_path)
+            except OSError:
+                pass
+            stderr = exc.stderr.decode(errors="replace") if exc.stderr else ""
+            raise ValueError(
+                f"ffmpeg failed to convert '{audio_path}' to WAV: {stderr}"
+            ) from exc
+
+        return wav_path
 
     @staticmethod
     def _read_wav(audio_path: str) -> tuple:

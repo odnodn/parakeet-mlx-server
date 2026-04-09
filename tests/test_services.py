@@ -472,12 +472,10 @@ class TestCreateDiarizationService:
         with pytest.raises(ValueError, match="Unknown diarization backend"):
             create_diarization_service("nonexistent_backend")
 
-    def test_pyannote_falls_back_to_auto(self):
-        svc = create_diarization_service("pyannote")
-        # pyannote not available → falls back to auto → energy
-        assert isinstance(svc, EnergyDiarizationService)
+    def test_pyannote_raises_when_unavailable(self):
+        with pytest.raises(RuntimeError, match="not available"):
+            create_diarization_service("pyannote")
 
-    def test_sortformer_falls_back_to_auto(self):
-        svc = create_diarization_service("sortformer")
-        # nemo not available → falls back to auto → energy
-        assert isinstance(svc, EnergyDiarizationService)
+    def test_sortformer_raises_when_unavailable(self):
+        with pytest.raises(RuntimeError, match="not available"):
+            create_diarization_service("sortformer")

@@ -66,12 +66,19 @@ def create_diarization_service(
 
     service = cls(**kwargs)
     if not service.is_available():
-        logger.warning(
-            "Requested backend '%s' is not available; "
-            "falling back to auto-selection.",
-            backend,
+        _install_hints: dict[str, str] = {
+            "sortformer": "pip install nemo_toolkit[asr]",
+            "pyannote": (
+                "pip install pyannote.audio  "
+                "(also set PYANNOTE_AUTH_TOKEN)"
+            ),
+        }
+        hint = _install_hints.get(backend, "")
+        hint_msg = f"  Install with: {hint}" if hint else ""
+        raise RuntimeError(
+            f"Diarization backend '{backend}' is not available — "
+            f"its dependencies are not installed.{hint_msg}"
         )
-        return _auto_select(**kwargs)
 
     logger.info("Using diarization backend: %s", service.name)
     return service
